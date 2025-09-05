@@ -46,9 +46,9 @@ README.md -- project write-up
 - Some top customers had strong margins, while others were heavily discount-driven.  
 
 ### 📦 Category & Sub-Category Insights
-- **[Furnishings]** had the highest revenue (~[10.8]% of sales).  
-- **[Labels]** achieved the strongest profit margin (~ 43%).  
-- Sub-categories like **[Appliences]** delivered strong profit, while **[Fasteners]** underperformed despite high sales.  
+- **Furnishings** had the highest revenue (~10.8% of sales).  
+- **Labels** achieved the strongest profit margin (~ 43%).  
+- Sub-categories like **Appliances** delivered strong profit, while **Fasteners** underperformed despite high sales.  
 
 ### 💰 Discounts
 - Average discounts varied by category:  
