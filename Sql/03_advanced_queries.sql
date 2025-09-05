@@ -1,124 +1,112 @@
 /* ==========================================================
-   02_core_queries.sql
-   Purpose: business analysis queries (recruiter-facing)
+   03_advanced_queries.sql
+   Purpose: limited “bonus learning” queries you ran
+   Focus: running totals; YoY by category
    Table: public.superstore
    ========================================================== */
 
-/* sanity: row count each run */
-SELECT COUNT(*) AS total_rows
-FROM public.superstore;
-
-/* 1) Sales, profit, orders by year (with margin) */
-SELECT
-  EXTRACT(YEAR FROM order_date)::int AS order_year,
-  COUNT(DISTINCT order_id) AS orders,
-  ROUND(SUM(sales),2)      AS total_sales,
-  ROUND(SUM(profit),2)     AS total_profit,
-  ROUND(SUM(profit)/NULLIF(SUM(sales),0)*100,2) AS profit_margin_pct
-FROM public.superstore
-WHERE order_date IS NOT NULL
-GROUP BY 1
-ORDER BY 1;
-
-/* 2) Monthly sales & profit trend */
-SELECT
-  DATE_TRUNC('month', order_date)::date AS order_month,
-  ROUND(SUM(sales),2)  AS monthly_sales,
-  ROUND(SUM(profit),2) AS monthly_profit
-FROM public.superstore
-WHERE order_date IS NOT NULL
-GROUP BY 1
-ORDER BY 1;
-
-/* 3) Top 10 products by revenue */
-SELECT
-  product_name,
-  ROUND(SUM(sales),2)  AS revenue,
-  ROUND(SUM(profit),2) AS profit
-FROM public.superstore
-GROUP BY product_name
-ORDER BY revenue DESC
-LIMIT 10;
-
-/* 4) Top customers by sales & profit (+margin & orders) */
-SELECT
-  customer_id,
-  customer_name,
-  ROUND(SUM(sales),2)  AS total_sales,
-  ROUND(SUM(profit),2) AS total_profit,
-  COUNT(DISTINCT order_id) AS total_orders,
-  ROUND(SUM(profit)/NULLIF(SUM(sales),0)*100,2) AS profit_margin_pct
-FROM public.superstore
-GROUP BY customer_id, customer_name
-ORDER BY total_sales DESC, total_profit DESC
-LIMIT 10;
-
-/* 4a) % of total revenue contributed by top 10 customers (one-shot) */
-WITH overall AS (
-  SELECT SUM(sales) AS total_sales FROM public.superstore
-),
-top10 AS (
-  SELECT customer_id, customer_name, SUM(sales) AS customer_sales
+/* A) Monthly sales with running totals + % of annual total */
+WITH monthly AS (
+  SELECT
+    DATE_TRUNC('month', order_date)::date AS order_month,
+    EXTRACT(YEAR FROM order_date)::int     AS order_year,
+    SUM(sales) AS monthly_sales,
+    SUM(profit) AS monthly_profit
   FROM public.superstore
-  GROUP BY customer_id, customer_name
-  ORDER BY customer_sales DESC
-  LIMIT 10
+  WHERE order_date IS NOT NULL
+  GROUP BY 1, 2
+),
+running AS (
+  SELECT
+    order_year,
+    order_month,
+    monthly_sales,
+    monthly_profit,
+    SUM(monthly_sales)  OVER (PARTITION BY order_year ORDER BY order_month) AS running_sales,
+    SUM(monthly_profit) OVER (PARTITION BY order_year ORDER BY order_month) AS running_profit
+  FROM monthly
+),
+yearly AS (
+  SELECT order_year, SUM(monthly_sales) AS annual_sales
+  FROM monthly
+  GROUP BY order_year
 )
 SELECT
-  ROUND(SUM(customer_sales),2) AS top10_sales,
-  ROUND(SUM(customer_sales)/o.total_sales*100,2) AS pct_of_total_sales
-FROM top10
-CROSS JOIN overall o;
+  r.order_year,
+  r.order_month,
+  ROUND(r.monthly_sales,2)  AS monthly_sales,
+  ROUND(r.running_sales,2)  AS running_sales,
+  y.annual_sales,
+  ROUND(r.running_sales/NULLIF(y.annual_sales,0)*100,2) AS pct_of_year
+FROM running r
+JOIN yearly y USING (order_year)
+ORDER BY r.order_year, r.order_month;
 
-/* 5) Profit margin by region & category */
+/* (Optional helper) First month each year crossing 50% of annual sales */
+WITH base AS (
+  SELECT
+    DATE_TRUNC('month', order_date)::date AS order_month,
+    EXTRACT(YEAR FROM order_date)::int     AS order_year,
+    SUM(sales) AS monthly_sales
+  FROM public.superstore
+  WHERE order_date IS NOT NULL
+  GROUP BY 1, 2
+),
+rt AS (
+  SELECT
+    order_year,
+    order_month,
+    SUM(monthly_sales) OVER (PARTITION BY order_year ORDER BY order_month) AS running_sales
+  FROM base
+),
+yr AS (
+  SELECT order_year, SUM(monthly_sales) AS annual_sales
+  FROM base
+  GROUP BY order_year
+),
+pct AS (
+  SELECT
+    rt.order_year,
+    rt.order_month,
+    rt.running_sales,
+    yr.annual_sales,
+    rt.running_sales/NULLIF(yr.annual_sales,0) AS pct
+  FROM rt
+  JOIN yr ON yr.order_year = rt.order_year
+)
+SELECT order_year, order_month, ROUND(pct*100,2) AS pct_of_year
+FROM (
+  SELECT *,
+         ROW_NUMBER() OVER (PARTITION BY order_year ORDER BY order_month) AS rn50
+  FROM pct
+  WHERE pct >= 0.50
+) x
+WHERE rn50 = 1
+ORDER BY order_year;
+
+/* B) YoY sales growth by category */
+WITH yearly AS (
+  SELECT
+    EXTRACT(YEAR FROM order_date)::int AS order_year,
+    category,
+    SUM(sales) AS total_sales
+  FROM public.superstore
+  WHERE order_date IS NOT NULL
+  GROUP BY 1, 2
+),
+yoy AS (
+  SELECT
+    order_year,
+    category,
+    total_sales,
+    LAG(total_sales) OVER (PARTITION BY category ORDER BY order_year) AS prior_year_sales
+  FROM yearly
+)
 SELECT
-  region,
+  order_year,
   category,
-  ROUND(SUM(sales),2)  AS total_sales,
-  ROUND(SUM(profit),2) AS total_profit,
-  ROUND(SUM(profit)/NULLIF(SUM(sales),0)*100,2) AS profit_margin_pct
-FROM public.superstore
-GROUP BY region, category
-ORDER BY region, category;
-
-/* 6) Average discount by category (for README “Discounts”) */
-SELECT
-  category,
-  ROUND(AVG(discount)*100,2) AS avg_discount_pct
-FROM public.superstore
-GROUP BY category
-ORDER BY avg_discount_pct DESC;
-
-/* 7) Sub-category margins — best 10 */
-SELECT
-  sub_category,
-  ROUND(SUM(sales),2)  AS total_sales,
-  ROUND(SUM(profit),2) AS total_profit,
-  ROUND(SUM(profit)/NULLIF(SUM(sales),0)*100,2) AS profit_margin_pct
-FROM public.superstore
-GROUP BY sub_category
-HAVING SUM(sales) > 0
-ORDER BY profit_margin_pct DESC
-LIMIT 10;
-
-/* 7a) Sub-category margins — worst 10 (risk) */
-SELECT
-  sub_category,
-  ROUND(SUM(sales),2)  AS total_sales,
-  ROUND(SUM(profit),2) AS total_profit,
-  ROUND(SUM(profit)/NULLIF(SUM(sales),0)*100,2) AS profit_margin_pct
-FROM public.superstore
-GROUP BY sub_category
-HAVING SUM(sales) > 0
-ORDER BY profit_margin_pct ASC
-LIMIT 10;
-
-/* 8) Regional totals (revenue/profit/margin) for README bullets */
-SELECT
-  region,
-  ROUND(SUM(sales),2)  AS total_sales,
-  ROUND(SUM(profit),2) AS total_profit,
-  ROUND(SUM(profit)/NULLIF(SUM(sales),0)*100,2) AS profit_margin_pct
-FROM public.superstore
-GROUP BY region
-ORDER BY total_sales DESC;
+  total_sales,
+  prior_year_sales,
+  ROUND((total_sales - prior_year_sales)/NULLIF(prior_year_sales,0)*100,2) AS yoy_growth_pct
+FROM yoy
+ORDER BY category, order_year;
